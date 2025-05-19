@@ -167,7 +167,9 @@ export const Install = () => {
                 <div className="relative">
                   <pre className="bg-zinc-800 px-4 py-3 rounded-md overflow-x-auto text-sm">
                     <code className="text-gray-300">
-                      {`npx install-mcp i ${URL}/mcp/${key}/sse/${user} --client ${key}`}
+                      {key === "cline" ? 
+                        `# SSE Connection (標準)\nnpx install-mcp i ${URL}/mcp/${key}/sse/${user} --client ${key}\n\n# WebSocket Connection (WSL2推奨)\nnpx install-mcp i ${URL}/mcp/${key}/ws/${user} --client ${key} --transport websocket` :
+                        `npx install-mcp i ${URL}/mcp/${key}/sse/${user} --client ${key}`}
                     </code>
                   </pre>
                   <div>
