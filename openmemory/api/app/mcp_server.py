@@ -19,6 +19,7 @@ import logging
 import json
 from mcp.server.fastmcp import FastMCP
 from mcp.server.sse import SseServerTransport
+from mcp.server.websocket import WebSocketServerTransport
 from app.utils.memory import get_memory_client
 from fastapi import FastAPI, Request
 from fastapi.routing import APIRouter
@@ -30,6 +31,7 @@ from app.models import Memory, MemoryState, MemoryStatusHistory, MemoryAccessLog
 from app.utils.db import get_user_and_app
 import uuid
 import datetime
+from datetime import timezone
 from app.utils.permissions import check_memory_access_permissions
 from qdrant_client import models as qdrant_models
 
@@ -57,6 +59,8 @@ mcp_router = APIRouter(prefix="/mcp")
 
 # Initialize SSE transport
 sse = SseServerTransport("/mcp/messages/")
+# Initialize WebSocket transport
+ws = WebSocketServerTransport("/mcp/ws/")
 
 @mcp.tool(description="Add a new memory. This method is called everytime the user informs anything about themselves, their preferences, or anything that has any relevant information which can be useful in the future conversation. This can also be called when the user asks you to remember something.")
 async def add_memories(text: str) -> str:
@@ -122,7 +126,7 @@ async def add_memories(text: str) -> str:
                     elif result['event'] == 'DELETE':
                         if memory:
                             memory.state = MemoryState.deleted
-                            memory.deleted_at = datetime.datetime.now(datetime.UTC)
+                            memory.deleted_at = datetime.datetime.now(timezone.utc)
                             # Create history entry
                             history = MemoryStatusHistory(
                                 memory_id=memory_id,
@@ -340,7 +344,7 @@ async def delete_all_memories() -> str:
                     logging.warning(f"Failed to delete memory {memory_id} from vector store: {delete_error}")
 
             # Update each memory's state and create history entries
-            now = datetime.datetime.now(datetime.UTC)
+            now = datetime.datetime.now(timezone.utc)
             for memory_id in accessible_memory_ids:
                 memory = db.query(Memory).filter(Memory.id == memory_id).first()
                 # Update memory state
@@ -377,6 +381,8 @@ async def delete_all_memories() -> str:
 @mcp_router.get("/{client_name}/sse/{user_id}")
 async def handle_sse(request: Request):
     """Handle SSE connections for a specific user and client"""
+    from app.utils.connection import with_retry
+    
     # Extract user_id and client_name from path parameters
     uid = request.path_params.get("user_id")
     user_token = user_id_var.set(uid or "")
@@ -384,17 +390,26 @@ async def handle_sse(request: Request):
     client_token = client_name_var.set(client_name or "")
 
     try:
-        # Handle SSE connection
-        async with sse.connect_sse(
-            request.scope,
-            request.receive,
-            request._send,
-        ) as (read_stream, write_stream):
-            await mcp._mcp_server.run(
-                read_stream,
-                write_stream,
-                mcp._mcp_server.create_initialization_options(),
-            )
+        @with_retry(max_attempts=3)
+        async def establish_sse_connection():
+            logging.info(f"Establishing SSE connection for user {uid} with client {client_name}")
+            async with sse.connect_sse(
+                request.scope,
+                request.receive,
+                request._send,
+            ) as (read_stream, write_stream):
+                logging.info(f"SSE connection established for user {uid} with client {client_name}")
+                await mcp._mcp_server.run(
+                    read_stream,
+                    write_stream,
+                    mcp._mcp_server.create_initialization_options(),
+                )
+                
+        await establish_sse_connection()
+        
+    except Exception as e:
+        logging.error(f"Failed to establish SSE connection after retries: {e}")
+        raise
     finally:
         # Clean up context variables
         user_id_var.reset(user_token)
@@ -407,7 +422,7 @@ async def handle_get_message(request: Request):
 
 
 @mcp_router.post("/{client_name}/sse/{user_id}/messages/")
-async def handle_post_message(request: Request):
+async def handle_client_post_message(request: Request):
     return await handle_post_message(request)
 
 async def handle_post_message(request: Request):
@@ -433,9 +448,45 @@ async def handle_post_message(request: Request):
         # Clean up context variable
         # client_name_var.reset(client_token)
 
+@mcp_router.websocket("/{client_name}/ws/{user_id}")
+async def handle_websocket(websocket):
+    """Handle WebSocket connections for a specific user and client"""
+    # Extract user_id and client_name from path parameters
+    uid = websocket.path_params.get("user_id")
+    user_token = user_id_var.set(uid or "")
+    client_name = websocket.path_params.get("client_name")
+    client_token = client_name_var.set(client_name or "")
+    
+    logging.info(f"WebSocket connection request from user {uid} with client {client_name}")
+    
+    try:
+        async with ws.connect_websocket(
+            websocket,
+        ) as (read_stream, write_stream):
+            logging.info(f"WebSocket connection established for user {uid} with client {client_name}")
+            
+            await mcp._mcp_server.run(
+                read_stream,
+                write_stream,
+                mcp._mcp_server.create_initialization_options(),
+            )
+    except Exception as e:
+        logging.error(f"WebSocket connection error for user {uid} with client {client_name}: {e}")
+        raise
+    finally:
+        # Clean up context variables
+        user_id_var.reset(user_token)
+        client_name_var.reset(client_token)
+
 def setup_mcp_server(app: FastAPI):
     """Setup MCP server with the FastAPI application"""
     mcp._mcp_server.name = f"mem0-mcp-server"
+    
+    try:
+        from app.utils.wsl_optimization import setup_wsl_optimizations
+        setup_wsl_optimizations(app)
+    except ImportError:
+        logging.warning("WSL optimization module not available")
 
     # Include MCP router in the FastAPI app
     app.include_router(mcp_router)

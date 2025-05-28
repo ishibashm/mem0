@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mem0 Web UI - Context Management</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #333; }
+        label { display: block; margin-top: 10px; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"], textarea {
+            width: calc(100% - 22px);
+            padding: 10px;
+            margin-bottom: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        textarea { min-height: 80px; resize: vertical; }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+            margin-top: 5px;
+        }
+        button:hover { background-color: #0056b3; }
+        pre {
+            background-color: #eee;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            min-height: 100px;
+            margin-top: 20px;
+        }
+        .input-group { margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Mem0 Web UI - Context Management</h1>
+
+        <div class="input-group">
+            <label for="user_id">User ID:</label>
+            <input type="text" id="user_id" placeholder="Enter User ID">
+        </div>
+
+        <div class="input-group">
+            <label for="memory_data">Message/Context to Remember:</label>
+            <textarea id="memory_data" placeholder="Enter message or context to remember"></textarea>
+            <button id="add_memory_button">Add Memory</button>
+        </div>
+
+        <div class="input-group">
+            <label for="search_query">Search Query:</label>
+            <input type="text" id="search_query" placeholder="Enter search query">
+            <button id="search_memories_button">Search Memories</button>
+        </div>
+        
+        <div class="input-group">
+            <button id="get_all_memories_button">Get All Memories</button>
+        </div>
+
+        <div class="input-group">
+            <label for="memory_id_delete">Memory ID to Delete:</label>
+            <input type="text" id="memory_id_delete" placeholder="Enter Memory ID to delete">
+            <button id="delete_memory_button">Delete Memory</button>
+        </div>
+
+        <h2>API Response:</h2>
+        <pre id="results_display">API responses will appear here.</pre>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const userIdInput = document.getElementById('user_id');
+            const memoryDataInput = document.getElementById('memory_data');
+            const searchQueryInput = document.getElementById('search_query');
+            const memoryIdDeleteInput = document.getElementById('memory_id_delete'); // New input
+            const resultsDisplay = document.getElementById('results_display');
+
+            const addMemoryButton = document.getElementById('add_memory_button');
+            const searchMemoriesButton = document.getElementById('search_memories_button');
+            const getAllMemoriesButton = document.getElementById('get_all_memories_button');
+            const deleteMemoryButton = document.getElementById('delete_memory_button');
+
+            const showLoading = () => {
+                resultsDisplay.textContent = 'Loading...';
+            };
+
+            const displayData = (data) => {
+                if (data.status === 'error') {
+                    resultsDisplay.textContent = `Error: ${data.message}`;
+                } else if (data.message && (data.results === undefined || (Array.isArray(data.results) && data.results.length === 0)) && (data.memories === undefined || (Array.isArray(data.memories) && data.memories.length === 0))) {
+                    // Display message like "No memories found" or "Memory added successfully"
+                    resultsDisplay.textContent = data.message;
+                } else {
+                    resultsDisplay.textContent = JSON.stringify(data, null, 2);
+                }
+            };
+            
+            const displayNetworkError = () => {
+                resultsDisplay.textContent = 'Network error or server unavailable. Please try again later.';
+            };
+
+            addMemoryButton.addEventListener('click', async () => {
+                const userId = userIdInput.value.trim();
+                const memoryData = memoryDataInput.value.trim();
+
+                if (!userId || !memoryData) {
+                    displayData({ status: "error", message: "User ID and Memory Data cannot be empty." });
+                    return;
+                }
+                showLoading();
+                try {
+                    const response = await fetch('/api/memory/add', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ user_id: userId, data: memoryData })
+                    });
+                    const result = await response.json();
+                    if (!response.ok) {
+                        throw result; // Throw error object from server if not ok
+                    }
+                    displayData(result);
+                    if (result.status === 'success') {
+                        memoryDataInput.value = '';
+                    }
+                } catch (error) {
+                    if (error && error.message) { // Error from server (parsed JSON)
+                        displayData({ status: "error", message: error.message });
+                    } else { // Network or other fetch error
+                        displayNetworkError();
+                    }
+                }
+            });
+
+            searchMemoriesButton.addEventListener('click', async () => {
+                const userId = userIdInput.value.trim();
+                const query = searchQueryInput.value.trim();
+
+                if (!userId || !query) {
+                    displayData({ status: "error", message: "User ID and Search Query cannot be empty." });
+                    return;
+                }
+                showLoading();
+                try {
+                    const response = await fetch(`/api/memory/search?user_id=${encodeURIComponent(userId)}&query=${encodeURIComponent(query)}`);
+                    const result = await response.json();
+                    if (!response.ok) {
+                        throw result;
+                    }
+                    displayData(result);
+                    if (result.status === 'success') {
+                        searchQueryInput.value = '';
+                    }
+                } catch (error) {
+                     if (error && error.message) {
+                        displayData({ status: "error", message: error.message });
+                    } else {
+                        displayNetworkError();
+                    }
+                }
+            });
+
+            getAllMemoriesButton.addEventListener('click', async () => {
+                const userId = userIdInput.value.trim();
+
+                if (!userId) {
+                    displayData({ status: "error", message: "User ID cannot be empty." });
+                    return;
+                }
+                showLoading();
+                try {
+                    const response = await fetch(`/api/memory/get_all?user_id=${encodeURIComponent(userId)}`);
+                    const result = await response.json();
+                    if (!response.ok) {
+                        throw result;
+                    }
+                    displayData(result);
+                } catch (error) {
+                     if (error && error.message) {
+                        displayData({ status: "error", message: error.message });
+                    } else {
+                        displayNetworkError();
+                    }
+                }
+            });
+
+            deleteMemoryButton.addEventListener('click', async () => {
+                const userId = userIdInput.value.trim();
+                const memoryId = memoryIdDeleteInput.value.trim();
+
+                if (!userId || !memoryId) {
+                    displayData({ status: "error", message: "User ID and Memory ID to Delete cannot be empty." });
+                    return;
+                }
+                showLoading();
+                try {
+                    const response = await fetch(`/api/memory/delete?user_id=${encodeURIComponent(userId)}&memory_id=${encodeURIComponent(memoryId)}`, {
+                        method: 'DELETE'
+                    });
+                    const result = await response.json();
+                     if (!response.ok) {
+                        throw result;
+                    }
+                    displayData(result);
+                    if (result.status === 'success') {
+                        memoryIdDeleteInput.value = '';
+                    }
+                } catch (error) {
+                     if (error && error.message) {
+                        displayData({ status: "error", message: error.message });
+                    } else {
+                        displayNetworkError();
+                    }
+                }
+            });
+        });
+    </script>
+</body>
+</html>
